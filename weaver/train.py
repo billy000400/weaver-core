@@ -142,6 +142,8 @@ parser.add_argument('--backend', type=str, choices=['gloo', 'nccl', 'mpi'], defa
                     help='backend for distributed training')
 parser.add_argument('--cross-validation', type=str, default=None,
                     help='enable k-fold cross validation; input format: `variable_name%%k`')
+parser.add_argument('--disable-mps', type=bool, default=False,
+                    help='disable using mps device if it does not work for you')
 
 
 def to_filelist(args, mode='train'):
@@ -748,11 +750,12 @@ def _main(args):
     else:
         gpus = None
         dev = torch.device('cpu')
-        try:
-            if torch.backends.mps.is_available():
-                dev = torch.device('mps')
-        except AttributeError:
-            pass
+        if not args.disable_mps:
+            try:
+                if torch.backends.mps.is_available():
+                    dev = torch.device('mps')
+            except AttributeError:
+                pass
 
     # load data
     if training_mode:
@@ -764,7 +767,6 @@ def _main(args):
         data_loader = train_loader if training_mode else list(test_loaders.values())[0]()
         iotest(args, data_loader)
         return
-
     model, model_info, loss_func = model_setup(args, data_config, device=dev)
 
     # TODO: load checkpoint
@@ -868,11 +870,12 @@ def _main(args):
             else:
                 gpus = None
                 dev = torch.device('cpu')
-                try:
-                    if torch.backends.mps.is_available():
-                        dev = torch.device('mps')
-                except AttributeError:
-                    pass
+                if not args.disable_mps:
+                    try:
+                        if torch.backends.mps.is_available():
+                            dev = torch.device('mps')
+                    except AttributeError:
+                        pass
             model = orig_model.to(dev)
             model_path = args.model_prefix if args.model_prefix.endswith(
                 '.pt') else args.model_prefix + '_best_epoch_state.pt'
