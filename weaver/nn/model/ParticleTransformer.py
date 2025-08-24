@@ -554,13 +554,16 @@ class ParticleTransformer(nn.Module):
                 attn_mask = self.pair_embed(v, uu).view(-1, v.size(-1), v.size(-1))  # (N*num_heads, P, P)
 
             # transform
+            hiddens = []
             for block in self.blocks:
                 x = block(x, x_cls=None, padding_mask=padding_mask, attn_mask=attn_mask)
+                hiddens.append(out)
 
             # extract class token
             cls_tokens = self.cls_token.expand(1, x.size(1), -1)  # (1, N, C)
             for block in self.cls_blocks:
                 cls_tokens = block(x, x_cls=cls_tokens, padding_mask=padding_mask)
+                hiddens.append(out)
 
             x_cls = self.norm(cls_tokens).squeeze(0)
 
