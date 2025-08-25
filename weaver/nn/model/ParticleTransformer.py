@@ -479,12 +479,14 @@ class ParticleTransformer(nn.Module):
                  # misc
                  trim=True,
                  for_inference=False,
+                 hidden_states=False,
                  use_amp=False,
                  **kwargs) -> None:
         super().__init__(**kwargs)
 
         self.trimmer = SequenceTrimmer(enabled=trim and not for_inference)
         self.for_inference = for_inference
+        self.hidden_states = hidden_states
         self.use_amp = use_amp
 
         embed_dim = embed_dims[-1] if len(embed_dims) > 0 else input_dim
@@ -557,24 +559,24 @@ class ParticleTransformer(nn.Module):
             hiddens = []
             for block in self.blocks:
                 x = block(x, x_cls=None, padding_mask=padding_mask, attn_mask=attn_mask)
-                hiddens.append(out)
+                hiddens.append(x)
 
             # extract class token
             cls_tokens = self.cls_token.expand(1, x.size(1), -1)  # (1, N, C)
             for block in self.cls_blocks:
                 cls_tokens = block(x, x_cls=cls_tokens, padding_mask=padding_mask)
-                hiddens.append(out)
+                hiddens.append(x)
 
             x_cls = self.norm(cls_tokens).squeeze(0)
 
             # fc
             if self.fc is None:
-                return x_cls
+                return (x_cls, hiddens) if self.hidden_states else x_cls
             output = self.fc(x_cls)
             if self.for_inference:
                 output = torch.softmax(output, dim=1)
             # print('output:\n', output)
-            return output
+            return (output, hiddens) if self.hidden_states else output
 
 
 class ParticleTransformerTagger(nn.Module):

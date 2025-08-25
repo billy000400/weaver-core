@@ -19,16 +19,18 @@ def _flatten_label(label, mask=None):
     return label
 
 
-def _flatten_preds(model_output, label=None, mask=None, label_axis=1):
-    if not isinstance(model_output, tuple):
+def _flatten_preds(model_output, label=None, mask=None, label_axis=1, hidden_states=False):
+    if hidden_states:
+        preds, hidden = model_output
+    elif not isinstance(model_output, tuple):
         # `label` and `mask` are provided as function arguments
         preds = model_output
     else:
-        if len(model_output == 2):
+        if len(model_output) == 2:
             # use `mask` from model_output instead
             # `label` still provided as function argument
             preds, mask = model_output
-        elif len(model_output == 3):
+        elif len(model_output) == 3:
             # use `label` and `mask` from model output
             preds, label, mask = model_output
 
@@ -45,7 +47,7 @@ def _flatten_preds(model_output, label=None, mask=None, label_axis=1):
     if label is not None:
         label = _flatten_label(label, mask)
 
-    return preds, label, mask
+    return (preds, label, mask, hidden) if hidden_states else (preds, label, mask)
 
 
 def train_classification(
@@ -140,7 +142,7 @@ def train_classification(
 
 def evaluate_classification(model, test_loader, dev, epoch, for_training=True, loss_func=None, steps_per_epoch=None,
                             eval_metrics=['roc_auc_score', 'roc_auc_score_matrix', 'confusion_matrix'],
-                            tb_helper=None):
+                            tb_helper=None, hidden_states=False):
     model.eval()
 
     data_config = test_loader.dataset.config
@@ -168,7 +170,10 @@ def evaluate_classification(model, test_loader, dev, epoch, for_training=True, l
                 except KeyError:
                     mask = None
                 model_output = model(*inputs)
-                logits, label, mask = _flatten_preds(model_output, label=label, mask=mask)
+                if hidden_states:
+                    logits, label, mask, hidden = _flatten_preds(model_output, label=label, mask=mask, hidden_states=hidden_states)
+                else:
+                    logits, label, mask = _flatten_preds(model_output, label=label, mask=mask)
                 scores.append(torch.softmax(logits.float(), dim=1).numpy(force=True))
 
                 if mask is not None:
@@ -244,7 +249,10 @@ def evaluate_classification(model, test_loader, dev, epoch, for_training=True, l
                 for k, v in labels.items():
                     labels[k] = v.reshape((entry_count, -1))
         observers = {k: _concat(v) for k, v in observers.items()}
-        return total_correct / count, scores, labels, observers
+        if hidden_states:
+            return total_correct / count, scores, labels, observers, hidden
+        else:
+            return total_correct / count, scores, labels, observers
 
 
 def evaluate_onnx(model_path, test_loader, eval_metrics=['roc_auc_score', 'roc_auc_score_matrix', 'confusion_matrix']):

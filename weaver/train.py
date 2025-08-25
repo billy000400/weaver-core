@@ -16,6 +16,7 @@ from torch.utils.data import DataLoader
 from weaver.utils.logger import _logger, _configLogger
 from weaver.utils.dataset import SimpleIterDataset
 from weaver.utils.import_tools import import_module
+from weaver.utils.h5_hidden import H5AppendWriter
 
 parser = argparse.ArgumentParser()
 parser.add_argument('--regression-mode', action='store_true', default=False,
@@ -142,8 +143,12 @@ parser.add_argument('--backend', type=str, choices=['gloo', 'nccl', 'mpi'], defa
                     help='backend for distributed training')
 parser.add_argument('--cross-validation', type=str, default=None,
                     help='enable k-fold cross validation; input format: `variable_name%%k`')
-parser.add_argument('--disable-mps', type=bool, default=False,
+parser.add_argument('--disable-mps', action='store_true', default=False,
                     help='disable using mps device if it does not work for you')
+parser.add_argument('--hidden-states-out', type=str, default="hidden_states_out.h5",
+                    help='path to save hidden states as h5 file')
+parser.add_argument('--hidden-states', action='store_true', default=False,
+                    help='let ParT output hidden states with the logits')
 
 
 def to_filelist(args, mode='train'):
@@ -892,11 +897,22 @@ def _main(args):
                 _logger.info('Loading model %s for eval' % args.model_prefix)
                 from weaver.utils.nn.tools import evaluate_onnx
                 test_metric, scores, labels, observers = evaluate_onnx(args.model_prefix, test_loader)
+            elif args.hidden_states:
+                _logger.info('Evaluating scores and fetching hidden')
+                test_metric, scores, labels, observers, hidden = evaluate(
+                    model, test_loader, dev, epoch=None, for_training=False, tb_helper=tb, hidden_states=args.hidden_states)
+                _logger.info('Test metric %.5f' % test_metric, color='bold')
             else:
                 test_metric, scores, labels, observers = evaluate(
-                    model, test_loader, dev, epoch=None, for_training=False, tb_helper=tb)
-            _logger.info('Test metric %.5f' % test_metric, color='bold')
+                    model, test_loader, dev, epoch=None, for_training=False, tb_helper=tb, hidden_states=args.hidden_states)
+                _logger.info('Test metric %.5f' % test_metric, color='bold')
             del test_loader
+
+            # Stream to HDF5 if requested
+            if args.hidden_states and hidden is not None:
+                _logger.info('Saving hidden states to %s' % args.hidden_states_out)
+                with H5AppendWriter(args.hidden_states_out, compression="lzf") as writer:
+                    writer.append(hidden)
 
             if args.predict_output:
                 if not os.path.dirname(args.predict_output):
