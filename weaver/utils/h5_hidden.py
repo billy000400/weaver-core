@@ -41,50 +41,91 @@ class H5AppendWriter:
 
     def append(self, layer_tensors, mask=None, layer_names=None):
         """
-        layer_tensors: List[Tensor] per layer, each (B,T,D) or (T,B,D)
-        mask: Optional Tensor (B,T) (bool/uint8)
-        layer_names: Optional List[str] same length as layer_tensors
+        Accepts hidden states as:
+        - dict[str, Tensor]                 # names are the dict keys
+        - list/tuple[Tensor]                # names auto: hidden_1..N (or use layer_names)
+        - Tensor of shape (L, B, T, D)      # split along L
+        - Tensor of shape (B, T, D)         # single layer
+        Optionally accepts a mask of shape (B, T) (bool/uint8).
         """
-        # --- normalize to a list of tensors ---
-        if isinstance(layer_tensors, torch.Tensor):
-            layer_tensors = [layer_tensors]
-        elif isinstance(layer_tensors, np.ndarray):
-            # (B,T,D) single layer from numpy
-            layer_tensors = [torch.from_numpy(layer_tensors)]
+
+        # ---- Normalize inputs into (names, tensors) without external helpers ----
+        names = None
+        tensors = None
+
+        if isinstance(layer_tensors, dict):
+            # Keep provided order
+            names = list(layer_tensors.keys())
+            tensors = [layer_tensors[k] for k in names]
+
         elif isinstance(layer_tensors, (list, tuple)):
-            layer_tensors = list(layer_tensors)
+            tensors = list(layer_tensors)
+            names = layer_names or [f"hidden_{i+1}" for i in range(len(tensors))]
+
+        elif isinstance(layer_tensors, torch.Tensor):
+            if layer_tensors.ndim == 4:
+                # (L, B, T, D) -> split along L
+                L = layer_tensors.shape[0]
+                tensors = list(layer_tensors.unbind(0))
+                names = layer_names or [f"hidden_{i+1}" for i in range(L)]
+            elif layer_tensors.ndim == 3:
+                tensors = [layer_tensors]
+                names = layer_names or ["hidden_1"]
+            else:
+                raise ValueError(f"Unsupported tensor rank: {layer_tensors.ndim}, expected 3 or 4.")
         else:
-            raise TypeError("layer_tensors must be a Tensor or a sequence of Tensors")
+            raise TypeError("layer_tensors must be dict, sequence of Tensors, or a Tensor.")
 
-        if len(layer_tensors) == 0:
+        if len(tensors) == 0:
             return
-        
-        x0 = self._to_btd(layer_tensors[0])
-        B, T, D = x0.shape
-        names = layer_names or [f"layer_{i}" for i in range(len(layer_tensors))]
+        if len(names) != len(tensors):
+            raise ValueError(f"layer_names length ({len(names)}) must match number of tensors ({len(tensors)}).")
 
-        for n in names: self._mk(n, T, D)
+        # ---- Helper to standardize to (B, T, D) on CPU ----
+        def to_btd_cpu(x: torch.Tensor) -> torch.Tensor:
+            if x.ndim != 3:
+                raise ValueError(f"Each layer must be rank-3 (B,T,D or T,B,D); got {tuple(x.shape)}")
+            # Accept (B,T,D) or (T,B,D)
+            if x.shape[0] < x.shape[1]:   # likely (T,B,D)
+                x = x.permute(1, 0, 2)
+            return x.contiguous().to("cpu")
 
-        for n, t in zip(names, layer_tensors):
-            x = self._to_btd(t)
+        # ---- Determine (B, T, D) from the first tensor, create datasets lazily ----
+        first = to_btd_cpu(tensors[0])
+        B, T, D = first.shape
+
+        for n in names:
+            if n not in self.ds:
+                self._mk(n, T, D)
+
+        # ---- Write each layer ----
+        for n, t in zip(names, tensors):
+            x = to_btd_cpu(t)
             if tuple(x.shape) != (B, T, D):
-                raise ValueError(f"shape mismatch {tuple(x.shape)} vs {(B,T,D)}")
+                raise ValueError(f"Inconsistent shapes in batch: got {tuple(x.shape)} vs expected {(B, T, D)}")
             ds = self.ds[n]
             ds.resize(self.count + B, axis=0)
-            ds[self.count:self.count+B, :, :] = x.numpy().astype(self.dtype, copy=False)
+            ds[self.count:self.count + B, :, :] = x.numpy().astype(self.dtype, copy=False)
 
+        # ---- Optional mask ----
         if mask is not None:
             m = mask
             if isinstance(m, torch.Tensor):
                 m = m.to("cpu").to(torch.uint8).numpy()
+            elif isinstance(m, np.ndarray):
+                m = m.astype(np.uint8, copy=False)
+            else:
+                raise TypeError("mask must be a Tensor or numpy array.")
+
             if m.shape != (B, T):
-                raise ValueError(f"mask shape {m.shape} != {(B,T)}")
+                raise ValueError(f"Mask shape {m.shape} does not match (B, T) = {(B, T)}")
             self._mk_masks(T)
             dm = self.f["masks"]
             dm.resize(self.count + B, axis=0)
-            dm[self.count:self.count+B, :] = m
+            dm[self.count:self.count + B, :] = m
 
         self.count += B
+
 
     def close(self):
         self.f.flush(); self.f.close()
