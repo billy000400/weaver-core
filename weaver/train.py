@@ -868,6 +868,9 @@ def _main(args):
             del train_loader, val_loader
             test_loaders, data_config = test_load(args)
 
+        if args.hidden_states:
+            writer = H5AppendWriter(args.hidden_states_out, compression="lzf")
+
         if not args.model_prefix.endswith('.onnx'):
             if args.predict_gpus:
                 gpus = [int(i) for i in args.predict_gpus.split(',')]
@@ -901,6 +904,8 @@ def _main(args):
                 _logger.info('Evaluating scores and fetching hidden')
                 test_metric, scores, labels, observers, hidden = evaluate(
                     model, test_loader, dev, epoch=None, for_training=False, tb_helper=tb, hidden_states=args.hidden_states)
+                # for layer in hidden:
+                #     print(layer.size())
                 _logger.info('Test metric %.5f' % test_metric, color='bold')
             else:
                 test_metric, scores, labels, observers = evaluate(
@@ -911,8 +916,7 @@ def _main(args):
             # Stream to HDF5 if requested
             if args.hidden_states and hidden is not None:
                 _logger.info('Saving hidden states to %s' % args.hidden_states_out)
-                with H5AppendWriter(args.hidden_states_out, compression="lzf") as writer:
-                    writer.append(hidden)
+                writer.append(hidden)
 
             if args.predict_output:
                 if not os.path.dirname(args.predict_output):
@@ -931,6 +935,9 @@ def _main(args):
                     save_root(args, output_path, data_config, scores, labels, observers)
                 else:
                     save_parquet(args, output_path, scores, labels, observers)
+
+        if args.hidden_states:
+            writer.close()
 
 
 def main():

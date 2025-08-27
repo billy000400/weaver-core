@@ -560,6 +560,7 @@ class ParticleTransformer(nn.Module):
             for block in self.blocks:
                 x = block(x, x_cls=None, padding_mask=padding_mask, attn_mask=attn_mask)
                 hiddens.append(x)
+                # print("Inside ParticleTransformer, x shape:", x.size())
 
             # extract class token
             cls_tokens = self.cls_token.expand(1, x.size(1), -1)  # (1, N, C)
@@ -568,7 +569,7 @@ class ParticleTransformer(nn.Module):
                 hiddens.append(cls_tokens)
 
             x_cls = self.norm(cls_tokens).squeeze(0)
-            hiddens.append(x_cls)
+            hiddens.append(x_cls.unsqueeze(0))
 
             # fc
             if self.fc is None:

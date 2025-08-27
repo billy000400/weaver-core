@@ -168,8 +168,15 @@ class H5AppendWriter:
                 pad_T = T_ds - Tx
                 pad_D = D_ds - Dx
                 # pad to the right in both axes
-                pad_spec = ((0, 0), (0, max(0, pad_T)), (0, max(0, pad_D)))
-                x_np = _np_pad(x.numpy(), pad_spec, pad_value, target_shape=(Bx, T_ds, D_ds))
+                x_np = np.pad(
+                    x.numpy(),
+                    ((0, 0), (0, max(0, pad_T)), (0, max(0, pad_D))),
+                    mode="constant",
+                    constant_values=pad_value,
+                )
+                # enforce exact shape in case of mismatch
+                if x_np.shape != (Bx, T_ds, D_ds):
+                    x_np = x_np.reshape(Bx, T_ds, D_ds)
             else:
                 x_np = x.numpy()
 
@@ -180,15 +187,28 @@ class H5AppendWriter:
         # ---- Write /masks with dynamic T as well (expand columns if needed) ----
         if m_np is not None:
             dm = self.f["masks"]
-            # expand mask T if this batch has larger T than current
+
+            # Expand mask T if this batch has larger T than current
             if T_mask > dm.shape[1]:
                 dm.resize((dm.shape[0], T_mask))
-            # if the dataset has more columns than current mask, right-pad mask
+
+            # If the dataset has more columns than the current mask, right-pad the mask
             if dm.shape[1] > T_mask:
                 pad_T = dm.shape[1] - T_mask
-                m_np = _np_pad(m_np, ((0, 0), (0, pad_T)), 0, target_shape=(B, dm.shape[1]))
+                m_np = np.pad(
+                    m_np,
+                    ((0, 0), (0, pad_T)),        # pad along T on the right
+                    mode="constant",
+                    constant_values=0,
+                )
+                # (optional) enforce exact shape
+                if m_np.shape != (B, dm.shape[1]):
+                    m_np = m_np.reshape(B, dm.shape[1])
+
+            # Append rows
             dm.resize(self.count + B, axis=0)
             dm[self.count:self.count + B, :] = m_np
+
 
         # ---- Advance sample counter ----
         self.count += B
