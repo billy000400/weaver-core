@@ -868,9 +868,6 @@ def _main(args):
             del train_loader, val_loader
             test_loaders, data_config = test_load(args)
 
-        if args.hidden_states:
-            writer = H5AppendWriter(args.hidden_states_out, compression="lzf")
-
         if not args.model_prefix.endswith('.onnx'):
             if args.predict_gpus:
                 gpus = [int(i) for i in args.predict_gpus.split(',')]
@@ -902,8 +899,8 @@ def _main(args):
                 test_metric, scores, labels, observers = evaluate_onnx(args.model_prefix, test_loader)
             elif args.hidden_states:
                 _logger.info('Evaluating scores and fetching hidden')
-                test_metric, scores, labels, observers, hidden = evaluate(
-                    model, test_loader, dev, epoch=None, for_training=False, tb_helper=tb, hidden_states=args.hidden_states)
+                test_metric, scores, labels, observers = evaluate(
+                    model, test_loader, dev, epoch=None, for_training=False, tb_helper=tb, hidden_states=args.hidden_states, hidden_states_out=args.hidden_states_out)
                 # for layer in hidden:
                 #     print(layer.size())
                 _logger.info('Test metric %.5f' % test_metric, color='bold')
@@ -912,11 +909,6 @@ def _main(args):
                     model, test_loader, dev, epoch=None, for_training=False, tb_helper=tb, hidden_states=args.hidden_states)
                 _logger.info('Test metric %.5f' % test_metric, color='bold')
             del test_loader
-
-            # Stream to HDF5 if requested
-            if args.hidden_states and hidden is not None:
-                _logger.info('Saving hidden states to %s' % args.hidden_states_out)
-                writer.append(hidden)
 
             if args.predict_output:
                 if not os.path.dirname(args.predict_output):
@@ -935,9 +927,6 @@ def _main(args):
                     save_root(args, output_path, data_config, scores, labels, observers)
                 else:
                     save_parquet(args, output_path, scores, labels, observers)
-
-        if args.hidden_states:
-            writer.close()
 
 
 def main():

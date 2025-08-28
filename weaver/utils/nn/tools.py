@@ -8,6 +8,7 @@ from collections import defaultdict, Counter
 from .metrics import evaluate_metrics
 from ..data.tools import _concat
 from ..logger import _logger
+from weaver.utils.h5_hidden import H5AppendWriter
 
 
 def _flatten_label(label, mask=None):
@@ -142,7 +143,7 @@ def train_classification(
 
 def evaluate_classification(model, test_loader, dev, epoch, for_training=True, loss_func=None, steps_per_epoch=None,
                             eval_metrics=['roc_auc_score', 'roc_auc_score_matrix', 'confusion_matrix'],
-                            tb_helper=None, hidden_states=False):
+                            tb_helper=None, hidden_states=False, hidden_states_out=None):
     model.eval()
 
     data_config = test_loader.dataset.config
@@ -157,8 +158,13 @@ def evaluate_classification(model, test_loader, dev, epoch, for_training=True, l
     labels = defaultdict(list)
     labels_counts = []
     observers = defaultdict(list)
-    hiddens = []
     start_time = time.time()
+
+    if hidden_states:
+        if hidden_states_out is None:
+            writer = H5AppendWriter("hidden_states_out.h5", compression="lzf")
+        else:
+            writer = H5AppendWriter(hidden_states_out, compression="lzf")
     with torch.no_grad():
         with tqdm.tqdm(test_loader) as tq:
             for X, y, Z in tq:
@@ -173,7 +179,7 @@ def evaluate_classification(model, test_loader, dev, epoch, for_training=True, l
                 model_output = model(*inputs)
                 if hidden_states:
                     logits, label, mask, hidden = _flatten_preds(model_output, label=label, mask=mask, hidden_states=hidden_states)
-                    hiddens.append(hidden)
+                    writer.append(hidden)
                 else:
                     logits, label, mask = _flatten_preds(model_output, label=label, mask=mask)
                 scores.append(torch.softmax(logits.float(), dim=1).numpy(force=True))
@@ -230,18 +236,6 @@ def evaluate_classification(model, test_loader, dev, epoch, for_training=True, l
                 tb_helper.custom_fn(model_output=model_output, model=model, epoch=epoch, i_batch=-1, mode=tb_mode)
 
     scores = np.concatenate(scores)
-    # right now hidden: [Batch index, Layer index, P, N, C]
-    by_layer = list(zip(*hiddens))
-    hiddens_out = []
-    for layer_tensors in by_layer:
-        # stack batch dimension
-        # for batch in layer_tensors:
-        #     print(batch.size())
-        t = torch.cat(layer_tensors, dim=1)   # concat along N dimension
-        # t shape: [P, sum_b N_b, C]
-        # permute to [sum_b N_b, P, C]
-        t = t.permute(1, 0, 2)
-        hiddens_out.append(t)
     labels = {k: _concat(v) for k, v in labels.items()}
     metric_results = evaluate_metrics(labels[data_config.label_names[0]], scores, eval_metrics=eval_metrics)
     _logger.info('Evaluation metrics: \n%s', '\n'.join(
@@ -255,8 +249,6 @@ def evaluate_classification(model, test_loader, dev, epoch, for_training=True, l
             if len(labels_counts):
                 labels_counts = np.concatenate(labels_counts)
                 scores = ak.unflatten(scores, labels_counts)
-                if hidden_states:
-                    hiddens = torch.cat(hiddens, dim=0)
                 for k, v in labels.items():
                     labels[k] = ak.unflatten(v, labels_counts)
             else:
@@ -266,9 +258,8 @@ def evaluate_classification(model, test_loader, dev, epoch, for_training=True, l
                     labels[k] = v.reshape((entry_count, -1))
         observers = {k: _concat(v) for k, v in observers.items()}
         if hidden_states:
-            return total_correct / count, scores, labels, observers, hiddens_out
-        else:
-            return total_correct / count, scores, labels, observers
+            writer.close()
+        return total_correct / count, scores, labels, observers
 
 
 def evaluate_onnx(model_path, test_loader, eval_metrics=['roc_auc_score', 'roc_auc_score_matrix', 'confusion_matrix']):
